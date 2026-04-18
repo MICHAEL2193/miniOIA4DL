@@ -71,33 +71,42 @@ class Conv2D(Layer):
             raise ValueError("Mode must be 'direct' or 'im2col'")
 
     # --- DIRECT IMPLEMENTATION ---
-
-    def _forward_direct(self, input):
+ def _forward_direct(self, input):
         batch_size, _, in_h, in_w = input.shape
         k_h, k_w = self.kernel_size, self.kernel_size
+        stride = self.stride
+        padding = self.padding
 
-        if self.padding > 0:
-            input = np.pad(input,
-                           ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)),
-                           mode='constant').astype(np.float32)
+        if padding > 0:
+            input = np.pad(
+                input,
+                ((0, 0), (0, 0), (padding, padding), (padding, padding)),
+                mode='constant'
+            ).astype(np.float32)
 
-        out_h = (input.shape[2] - k_h) // self.stride + 1
-        out_w = (input.shape[3] - k_w) // self.stride + 1
+        out_h = (input.shape[2] - k_h) // stride + 1
+        out_w = (input.shape[3] - k_w) // stride + 1
         output = np.zeros((batch_size, self.out_channels, out_h, out_w), dtype=np.float32)
 
+        kernels = self.kernels
+        biases = self.biases
+
         for b in range(batch_size):
+            input_b = input[b]
             for out_c in range(self.out_channels):
-                for in_c in range(self.in_channels):
-                    for i in range(out_h):
-                        for j in range(out_w):
-                            region = input[b, in_c,
-                                           i * self.stride:i * self.stride + k_h,
-                                           j * self.stride:j * self.stride + k_w]
-                            output[b, out_c, i, j] += np.sum(region * self.kernels[out_c, in_c])
-                output[b, out_c] += self.biases[out_c]
+                kernel_oc = kernels[out_c]
+                bias_oc = biases[out_c]
+                output_oc = output[b, out_c]
+
+                for i in range(out_h):
+                    r = i * stride
+                    for j in range(out_w):
+                        c = j * stride
+                        region = input_b[:, r:r + k_h, c:c + k_w]
+                        output_oc[i, j] = np.sum(region * kernel_oc) + bias_oc
 
         return output
-
+    
     def _backward_direct(self, grad_output, learning_rate):
         batch_size, _, out_h, out_w = grad_output.shape
         _, _, in_h, in_w = self.input.shape
