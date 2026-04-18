@@ -14,12 +14,10 @@ class Conv2D(Layer):
         
         # MODIFICAR: Añadir nuevo if-else para otros algoritmos de convolución
         if conv_algo == 0:
-             self.mode = 'direct'
-        elif conv_algo == 1:
-             self.mode = 'im2col'
+            self.mode = 'direct' 
         else:
             print(f"Algoritmo {conv_algo} no soportado aún")
-            self.mode = 'direct'
+            self.mode = 'direct' 
 
         fan_in = in_channels * kernel_size * kernel_size
         fan_out = out_channels * kernel_size * kernel_size
@@ -62,10 +60,8 @@ class Conv2D(Layer):
         # PISTA: Usar estos if-else si implementas más algoritmos de convolución
         if self.mode == 'direct':
             return self._forward_direct(input)
-        elif self.mode == 'im2col':
-            return self._forward_im2col(input)    
         else:
-            raise ValueError("Mode must be 'direct' or 'im2col'")
+            raise ValueError("Mode must be 'direct")
 
     def backward(self, grad_output, learning_rate):
         # ESTO NO ES NECESARIO YA QUE NO VAIS A HACER BACKPROPAGATION
@@ -110,61 +106,6 @@ class Conv2D(Layer):
                         output_oc[i, j] = np.sum(region * kernel_oc) + bias_oc
 
         return output
-
-
-    # IM2COL IMPLEMENTATION, lo he creado apoyandome con la herramienta de ChatGPT
-    def _im2col_numpy(self, input_padded):
-        batch_size, channels, h, w = input_padded.shape
-        k_h, k_w = self.kernel_size, self.kernel_size
-        stride = self.stride
-
-        out_h = (h - k_h) // stride + 1
-        out_w = (w - k_w) // stride + 1
-
-        cols = np.empty((batch_size, out_h * out_w, channels * k_h * k_w), dtype=np.float32)
-
-        for i in range(out_h):
-            r = i * stride
-            for j in range(out_w):
-                c = j * stride
-                patch = input_padded[:, :, r:r + k_h, c:c + k_w]
-                cols[:, i * out_w + j, :] = patch.reshape(batch_size, -1)
-
-        return cols
-
-    def _forward_im2col(self, input):
-        batch_size, _, in_h, in_w = input.shape
-        k_h, k_w = self.kernel_size, self.kernel_size
-        stride = self.stride
-        padding = self.padding
-
-        if padding > 0:
-            input_padded = np.pad(
-                input,
-                ((0, 0), (0, 0), (padding, padding), (padding, padding)),
-                mode='constant'
-            ).astype(np.float32)
-        else:
-            input_padded = input.astype(np.float32, copy=False)
-
-        out_h = (input_padded.shape[2] - k_h) // stride + 1
-        out_w = (input_padded.shape[3] - k_w) // stride + 1
-
-        # Input -> columnas
-        cols = self._im2col_numpy(input_padded)   # (B, out_h*out_w, C*k*k)
-
-        # Kernels -> matriz
-        kernels_col = self.kernels.reshape(self.out_channels, -1).T  # (C*k*k, out_channels)
-
-        # GEMM
-        output = cols @ kernels_col + self.biases  # (B, out_h*out_w, out_channels)
-
-        # Reorganizar a formato NCHW
-        output = output.reshape(batch_size, out_h, out_w, self.out_channels)
-        output = output.transpose(0, 3, 1, 2).astype(np.float32)
-
-        return output
-
     
     def _backward_direct(self, grad_output, learning_rate):
         batch_size, _, out_h, out_w = grad_output.shape

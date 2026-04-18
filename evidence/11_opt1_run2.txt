@@ -1,0 +1,23 @@
+Building OIANet for CIFAR-100
+Measuring performance...
+FW Layer;Batch;Time(s);Performance(imgs/s)
+Conv2D;8;1.1403;7.02
+BatchNorm2D;8;0.1193;67.04
+ReLU;8;0.0404;197.82
+MaxPool2D;8;0.3147;25.43
+Conv2D;8;0.7062;11.33
+BatchNorm2D;8;0.0156;513.90
+ReLU;8;0.0113;706.33
+MaxPool2D;8;0.1480;54.07
+Conv2D;8;0.4737;16.89
+BatchNorm2D;8;0.0090;889.73
+ReLU;8;0.0020;3998.38
+MaxPool2D;8;0.0683;117.21
+Flatten;8;0.0000;184365.01
+Dense;8;3.8685;2.07
+ReLU;8;0.0014;5880.55
+Dropout;8;0.0046;1743.81
+Dense;8;0.1727;46.33
+Softmax;8;0.0041;1943.27
+==========================================
+Total time: 7.11s IPS: 1.13images/sec
