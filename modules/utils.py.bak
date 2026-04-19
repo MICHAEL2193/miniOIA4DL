@@ -1,4 +1,4 @@
 #PISTA: es esta la mejor forma de hacer una matmul?
 def matmul_biasses(A, B, C, bias):
-    return (A @ B + bias).astype(A.dtype, copy=False)
+    return (A @ B + bias).astype(np.float32)
 
