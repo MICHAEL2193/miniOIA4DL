@@ -1,7 +1,18 @@
-from setuptools import setup
+from setuptools import setup, Extension
 from Cython.Build import cythonize
-import numpy
+import numpy as np
 
-setup(ext_modules = cythonize("*.pyx", language_level=3),
-    include_dirs=[numpy.get_include()],
+extensions = [
+    Extension(
+        "*",
+        ["*.pyx"],
+        include_dirs=[np.get_include()],
+    )
+]
+
+setup(
+    ext_modules=cythonize(
+        extensions,
+        language_level=3
+    )
 )
