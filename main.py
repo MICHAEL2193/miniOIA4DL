@@ -50,7 +50,7 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', type=float, default=0.01, help='Learning rate for training (default: 0.01)')
     parser.add_argument('--performance', action='store_true', help='Enable performance measurement')
     parser.add_argument('--eval_only', action='store_true', help='Enable evaluation-only mode')
-    parser.add_argument('--conv_algo', type=int, default=0, choices=[0,1,2], help='Conv2d algorithm 0-direct, 1-im2col, 2-im2colfused (default: 0)')
+    parser.add_argument('--conv_algo', type=int, default=0, choices=[0,1,2,3], help='Conv2d algorithm 0-direct, 1-im2col, 2-im2colfused, 3-im2col_blocked (default: 0)')
     
     args = parser.parse_args()
     

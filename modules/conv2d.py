@@ -50,11 +50,11 @@ class Conv2D(Layer):
 
         # PISTA: Y estos valores para qué las podemos utilizar?
         # Si los usas, no olvides utilizar el modelo explicado en teoría que maximiza la caché
-        self.mc = 480
-        self.nc = 3072
-        self.kc = 384
-        self.mr = 32
-        self.nr = 12
+        self.mc = 256
+        self.nc = 128
+        self.kc = 128
+        self.mr = 8
+        self.nr = 8
         self.Ac = np.empty((self.mc, self.kc), dtype=np.float32)
         self.Bc = np.empty((self.kc, self.nc), dtype=np.float32)
         self.kernels_col_cached = None  #Caché para kernels
@@ -79,6 +79,51 @@ class Conv2D(Layer):
             self.kernels_col_valid = True
         return self.kernels_col_cached
 
+
+    #Contruido con ayuda de la IA
+    def _blocked_gemm(self, A, B):
+        M, K = A.shape
+        K2, N = B.shape
+        if K != K2:
+            raise ValueError("Dimensiones incompatibles en _blocked_gemm")
+
+        C = np.zeros((M, N), dtype=np.float32)
+
+        mc = min(self.mc, M)
+        nc = min(self.nc, N)
+        kc = min(self.kc, K)
+        mr = self.mr
+        nr = self.nr
+
+        for jc in range(0, N, nc):               # L1
+            jn = min(nc, N - jc)
+
+            for pc in range(0, K, kc):           # L2
+                pk = min(kc, K - pc)
+
+                # Pack B
+                self.Bc[:pk, :jn] = B[pc:pc + pk, jc:jc + jn]
+                Bc_block = self.Bc[:pk, :jn]
+
+                for ic in range(0, M, mc):       # L3
+                    im = min(mc, M - ic)
+
+                    # Pack A
+                    self.Ac[:im, :pk] = A[ic:ic + im, pc:pc + pk]
+                    Ac_block = self.Ac[:im, :pk]
+
+                    for jr in range(0, jn, nr):  # L4
+                        jr_n = min(nr, jn - jr)
+                        Br = Bc_block[:pk, jr:jr + jr_n]
+
+                        for ir in range(0, im, mr):  # L5
+                            ir_m = min(mr, im - ir)
+                            Ar = Ac_block[ir:ir + ir_m, :pk]
+
+                            C[ic + ir:ic + ir + ir_m,
+                              jc + jr:jc + jr + jr_n] += Ar @ Br
+
+        return C
     
     def forward(self, input, training=True):
         self.input = input
@@ -89,8 +134,10 @@ class Conv2D(Layer):
             return self._forward_im2col(input)
         elif self.mode == 'im2col_cython':
             return self._forward_im2col_cython(input)
+        elif self.mode == 'im2col_blocked':
+            return self._forward_im2col_blocked(input)    
         else:
-            raise ValueError("Mode must be 'direct', 'im2col' or 'im2col_cython'")
+            raise ValueError("Mode must be 'direct', 'im2col', 'im2col_cython' or 'im2col_blocked'")
 
     def backward(self, grad_output, learning_rate):
         # ESTO NO ES NECESARIO YA QUE NO VAIS A HACER BACKPROPAGATION
@@ -225,6 +272,50 @@ class Conv2D(Layer):
         output += self.biases
 
         output = output.reshape(batch_size, out_h, out_w, self.out_channels)
+        output = output.transpose(0, 3, 1, 2)
+
+        return np.ascontiguousarray(output, dtype=np.float32)
+
+    #Elaborado con apoyo de IA
+    def _forward_im2col_blocked(self, input):
+        batch_size, _, in_h, in_w = input.shape
+        k_h, k_w = self.kernel_size, self.kernel_size
+        stride = self.stride
+        padding = self.padding
+
+        if padding > 0:
+            input_padded = np.pad(
+                input,
+                ((0, 0), (0, 0), (padding, padding), (padding, padding)),
+                mode='constant'
+            ).astype(np.float32)
+        else:
+            input_padded = np.ascontiguousarray(input, dtype=np.float32)
+
+        out_h = (input_padded.shape[2] - k_h) // stride + 1
+        out_w = (input_padded.shape[3] - k_w) // stride + 1
+
+        if CYTHON_IM2COL_AVAILABLE:
+            cols = im2col_forward_cython(
+                np.ascontiguousarray(input_padded, dtype=np.float32),
+                self.kernel_size,
+                self.stride
+            )
+        else:
+            cols = self._im2col_numpy(input_padded)
+
+        # Aplanar batch y posiciones espaciales en una sola matriz 2D
+        A = np.ascontiguousarray(
+            cols.reshape(batch_size * out_h * out_w, -1),
+            dtype=np.float32
+        )
+
+        B = self._get_kernels_col()
+
+        C = self._blocked_gemm(A, B)
+        C += self.biases
+
+        output = C.reshape(batch_size, out_h, out_w, self.out_channels)
         output = output.transpose(0, 3, 1, 2)
 
         return np.ascontiguousarray(output, dtype=np.float32)
