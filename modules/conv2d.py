@@ -3,6 +3,11 @@ from modules.utils import *
 #from cython_modules.im2col import im2col_forward_cython
 
 import numpy as np
+try:
+    from cython_modules.im2col import im2col_forward_cython
+    CYTHON_IM2COL_AVAILABLE = True
+except ImportError:
+    CYTHON_IM2COL_AVAILABLE = False
 
 class Conv2D(Layer):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, conv_algo=0, weight_init="he"):
@@ -14,9 +19,13 @@ class Conv2D(Layer):
         
         # MODIFICAR: Añadir nuevo if-else para otros algoritmos de convolución
         if conv_algo == 0:
-             self.mode = 'direct'
+            self.mode = 'direct'
         elif conv_algo == 1:
-             self.mode = 'im2col'
+            self.mode = 'im2col' #Se añade nuevo modo
+        elif conv_algo == 2:
+            self.mode = 'im2col_cython' #Se añade nuevo modo
+        elif conv_algo == 3:
+            self.mode = 'im2col_blocked'    #Se añade un nuevo modo
         else:
             print(f"Algoritmo {conv_algo} no soportado aún")
             self.mode = 'direct'
@@ -48,6 +57,8 @@ class Conv2D(Layer):
         self.nr = 12
         self.Ac = np.empty((self.mc, self.kc), dtype=np.float32)
         self.Bc = np.empty((self.kc, self.nc), dtype=np.float32)
+        self.kernels_col_cached = None  #Caché para kernels
+        self.kernels_col_valid = False
 
 
     def get_weights(self):
@@ -56,6 +67,18 @@ class Conv2D(Layer):
     def set_weights(self, weights):
         self.kernels = weights['kernels']
         self.biases = weights['biases']
+        self.kernels_col_valid = False #Invalida caché
+
+    #Se añade método auxiliar
+    def _get_kernels_col(self):
+        if (not self.kernels_col_valid) or (self.kernels_col_cached is None):
+            self.kernels_col_cached = np.ascontiguousarray(
+                self.kernels.reshape(self.out_channels, -1).T,
+                dtype=np.float32
+            )
+            self.kernels_col_valid = True
+        return self.kernels_col_cached
+
     
     def forward(self, input, training=True):
         self.input = input
@@ -63,9 +86,11 @@ class Conv2D(Layer):
         if self.mode == 'direct':
             return self._forward_direct(input)
         elif self.mode == 'im2col':
-            return self._forward_im2col(input)    
+            return self._forward_im2col(input)
+        elif self.mode == 'im2col_cython':
+            return self._forward_im2col_cython(input)
         else:
-            raise ValueError("Mode must be 'direct' or 'im2col'")
+            raise ValueError("Mode must be 'direct', 'im2col' or 'im2col_cython'")
 
     def backward(self, grad_output, learning_rate):
         # ESTO NO ES NECESARIO YA QUE NO VAIS A HACER BACKPROPAGATION
@@ -121,16 +146,17 @@ class Conv2D(Layer):
         out_h = (h - k_h) // stride + 1
         out_w = (w - k_w) // stride + 1
 
-        cols = np.empty((batch_size, out_h * out_w, channels * k_h * k_w), dtype=np.float32)
+        windows = np.lib.stride_tricks.sliding_window_view(
+            input_padded, (k_h, k_w), axis=(2, 3)
+        )
 
-        for i in range(out_h):
-            r = i * stride
-            for j in range(out_w):
-                c = j * stride
-                patch = input_padded[:, :, r:r + k_h, c:c + k_w]
-                cols[:, i * out_w + j, :] = patch.reshape(batch_size, -1)
+        windows = windows[:, :, ::stride, ::stride, :, :]
 
-        return cols
+        cols = windows.transpose(0, 2, 3, 1, 4, 5).reshape(
+            batch_size, out_h * out_w, channels * k_h * k_w
+        )
+
+        return np.ascontiguousarray(cols, dtype=np.float32)
 
     def _forward_im2col(self, input):
         batch_size, _, in_h, in_w = input.shape
@@ -145,7 +171,7 @@ class Conv2D(Layer):
                 mode='constant'
             ).astype(np.float32)
         else:
-            input_padded = input.astype(np.float32, copy=False)
+            input_padded = np.ascontiguousarray(input, dtype=np.float32)
 
         out_h = (input_padded.shape[2] - k_h) // stride + 1
         out_w = (input_padded.shape[3] - k_w) // stride + 1
@@ -154,16 +180,54 @@ class Conv2D(Layer):
         cols = self._im2col_numpy(input_padded)   # (B, out_h*out_w, C*k*k)
 
         # Kernels -> matriz
-        kernels_col = self.kernels.reshape(self.out_channels, -1).T  # (C*k*k, out_channels)
+        kernels_col = self._get_kernels_col() # (C*k*k, out_channels)
 
         # GEMM
-        output = cols @ kernels_col + self.biases  # (B, out_h*out_w, out_channels)
+        output = cols @ kernels_col  # Modificado
+        output += self.biases  # (B, out_h*out_w, out_channels)
 
         # Reorganizar a formato NCHW
         output = output.reshape(batch_size, out_h, out_w, self.out_channels)
-        output = output.transpose(0, 3, 1, 2).astype(np.float32)
+        output = output.transpose(0, 3, 1, 2) # Modificado
 
-        return output
+        return np.ascontiguousarray(output, dtype=np.float32) # Modificado
+
+    def _forward_im2col_cython(self, input):  #Nuevo método
+        if not CYTHON_IM2COL_AVAILABLE:
+            return self._forward_im2col(input)
+
+        batch_size, _, in_h, in_w = input.shape
+        k_h, k_w = self.kernel_size, self.kernel_size
+        stride = self.stride
+        padding = self.padding
+
+        if padding > 0:
+            input_padded = np.pad(
+                input,
+                ((0, 0), (0, 0), (padding, padding), (padding, padding)),
+                mode='constant'
+            ).astype(np.float32)
+        else:
+            input_padded = np.ascontiguousarray(input, dtype=np.float32)
+
+        out_h = (input_padded.shape[2] - k_h) // stride + 1
+        out_w = (input_padded.shape[3] - k_w) // stride + 1
+
+        cols = im2col_forward_cython(
+            np.ascontiguousarray(input_padded, dtype=np.float32),
+            self.kernel_size,
+            self.stride
+        )
+
+        kernels_col = self._get_kernels_col()
+
+        output = cols @ kernels_col
+        output += self.biases
+
+        output = output.reshape(batch_size, out_h, out_w, self.out_channels)
+        output = output.transpose(0, 3, 1, 2)
+
+        return np.ascontiguousarray(output, dtype=np.float32)
 
     
     def _backward_direct(self, grad_output, learning_rate):
