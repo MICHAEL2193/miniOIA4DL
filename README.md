@@ -15,7 +15,7 @@ The educative goal is to motivate the students to apply the theoretical optimiza
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/adcastel/miniOIA4DL.git
+   git clone https://github.com/MICHAEL2193/miniOIA4DL.git
    cd miniOIA4DL
    ```
 2. Build the Cython modules (if any):
